@@ -24,10 +24,18 @@ async function run() {
     await client.connect();
     const db =client.db("eTuitionBd")
     const TuitionsCollection = db.collection("tuitions")
-      const UsersCollection = db.collection('users');
+    const UsersCollection = db.collection('users');
+    const TutorCollection =db.collection('tutor')
 
     
 // add inside run()
+// paste inside your run() after: const TutorCollection = db.collection('tutor')
+app.post('/tutors', async (req, res) => {
+  const data = req.body
+  const result =await TutorCollection.insertOne(data) 
+  return  res.send( result)
+ 
+});
 
 app.post('/users', async (req, res) => {
   const { email, name = '', phone = '', role = 'Student' } = req.body;
