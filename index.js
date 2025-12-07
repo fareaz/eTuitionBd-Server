@@ -2,11 +2,32 @@ const express = require('express')
 const app = express()
 const cors = require("cors")
 require("dotenv").config()
-const { MongoClient, ServerApiVersion } = require('mongodb');
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const port = 3000
 
 app.use(express.json())
 app.use(cors())
+
+const verifyFBToken = async (req, res, next) => {
+    const token = req.headers.authorization;
+
+    if (!token) {
+        return res.status(401).send({ message: 'unauthorized access' })
+    }
+
+    try {
+        const idToken = token.split(' ')[1];
+        const decoded = await admin.auth().verifyIdToken(idToken);
+        console.log('decoded in the token', decoded);
+        req.decoded_email = decoded.email;
+        next();
+    }
+    catch (err) {
+        return res.status(401).send({ message: 'unauthorized access' })
+    }
+
+
+  }
 const uri = `mongodb+srv://${process.env.USER_NAME}:${process.env.USER_PASS}@cluster0.5rsc2du.mongodb.net/?appName=Cluster0`;
 
 const client = new MongoClient(uri, {
@@ -61,7 +82,33 @@ app.post('/users', async (req, res) => {
 
   return res.send(result);
 });
+ app.get('/users/:email/role', async (req, res) => {
+  const email = req.params.email;
+  const user = await UsersCollection.findOne({ email });
+  res.send({ role: user?.role || 'student' });
+});
 
+app.get('/my-tuitions', async (req, res) => {
+ 
+    const email = req.query.email;
+    const normalized = String(email).toLowerCase().trim();
+    const result = await TuitionsCollection.find({ createdBy: normalized }).toArray();
+    res.send(result);
+ 
+});
+
+
+app.delete('/tuitions/:id', async (req, res) => {
+
+    console.log(req.params.id)
+    const id = req.params.id;
+    const _id = new ObjectId(id);
+    console.log(_id)
+    const result = await TuitionsCollection.deleteOne({ _id });
+    
+    res.send(result);
+ 
+});
 
    app.get('/tuitions', async (req, res) => {
     const result = await TuitionsCollection.find().toArray();
