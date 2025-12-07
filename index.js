@@ -4,7 +4,12 @@ const cors = require("cors")
 require("dotenv").config()
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const port = 3000
+const admin = require("firebase-admin");
 
+const serviceAccount = require("./serviceAccountKey.json");
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount)
+});
 app.use(express.json())
 app.use(cors())
 
@@ -58,7 +63,7 @@ app.post('/tutors', async (req, res) => {
  
 });
 
-app.post('/users', async (req, res) => {
+app.post('/users', verifyFBToken, async (req, res) => {
   const { email, name = '', phone = '', role = 'Student' } = req.body;
 
   const normalizedEmail = String(email).toLowerCase().trim();
@@ -82,11 +87,77 @@ app.post('/users', async (req, res) => {
 
   return res.send(result);
 });
+// GET /users?searchText=...  (already had verifyFBToken middleware in your sample)
+app.get('/users',async (req, res) => {
+
+    const searchText = req.query.searchText;
+    const query = {};
+
+    if (searchText) {
+      const regex = { $regex: searchText, $options: 'i' };
+      query.$or = [
+        { displayName: regex },
+        { email: regex }
+      ];
+    }
+
+    const cursor = UsersCollection.find(query).sort({ createdAt: -1 }).limit(50); 
+    const result = await cursor.toArray();
+    res.send(result);
+ 
+});
+// // PATCH /users/:id/role
+// app.patch('/users/:id/role', verifyFBToken, async (req, res) => {
+//   try {
+//     const id = req.params.id;
+//     if (!id) return res.status(400).send({ message: 'id required' });
+
+//     // Optional: only admin should change roles — you can verify here using req.user from verifyFBToken
+//     // if (!req.user || req.user.role !== 'admin') return res.status(403).send({ message: 'Forbidden' });
+
+//     const { role } = req.body;
+//     if (!role) return res.status(400).send({ message: 'role required' });
+
+//     const normalizedRole = String(role).trim();
+
+//     const filter = { _id: new ObjectId(id) };
+//     const update = {
+//       $set: {
+//         role: normalizedRole,
+//         updatedAt: new Date()
+//       }
+//     };
+
+//     const result = await UsersCollection.updateOne(filter, update);
+//     res.send(result); // contains modifiedCount
+//   } catch (err) {
+//     console.error('PATCH /users/:id/role error', err);
+//     res.status(500).send({ message: 'Server error' });
+//   }
+// });
+
  app.get('/users/:email/role', async (req, res) => {
   const email = req.params.email;
   const user = await UsersCollection.findOne({ email });
   res.send({ role: user?.role || 'student' });
 });
+  app.patch('/users/:id/role', async (req, res) => {
+   
+     const id = req.params.id;
+           
+            const roleInfo = req.body;
+           
+            const query = { _id: new ObjectId(id) }
+            
+            
+            const updatedDoc = {
+                $set: {
+                    role: roleInfo.role
+                }
+            }
+            const result = await UsersCollection.updateOne(query, updatedDoc)
+            res.send(result);
+        })
 
 app.get('/my-tuitions', async (req, res) => {
  
