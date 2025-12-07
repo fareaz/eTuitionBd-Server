@@ -60,6 +60,17 @@ app.get('/tutors', async (req, res) => {
     const result = await TutorCollection.find().toArray();
     res.send(result);
 });
+// GET only approved tutors
+app.get('/approved-tutors', async (req, res) => {
+
+    const result = await TutorCollection.find({
+      status: "Approved"
+    }).sort({ createdAt: -1 }).toArray();
+
+    res.send(result);
+  
+});
+
 // PATCH /tutors/:id/status
 app.patch('/tutors/:id/status', verifyFBToken, async (req, res) => {
   try {
@@ -222,6 +233,35 @@ app.get('/tuitions', async (req, res) => {
     const result = await TuitionsCollection.find().toArray();
     res.send(result);
 });
+
+
+app.patch('/tuitions/:id', async (req, res) => {
+ 
+    const id = req.params.id;
+    const _id = new ObjectId(id);
+
+
+    const { subject, class: tuitionClass, location, budget } = req.body;
+
+    // Build update object
+    const updateFields = {};
+    if (subject !== undefined) updateFields.subject = String(subject).trim();
+    if (tuitionClass !== undefined) updateFields.class = String(tuitionClass).trim();
+    if (location !== undefined) updateFields.location = String(location).trim();
+    if (budget !== undefined) updateFields.budget = Number(budget);
+
+  
+
+    updateFields.updatedAt = new Date();
+
+    const result = await TuitionsCollection.updateOne(
+      { _id },
+      { $set: updateFields }
+    );
+    return res.send({ success: true,  result});
+  
+});
+
 app.post('/tuitions', async (req, res) => {
   
     const { subject, class: tuitionClass, location, budget, createdBy } = req.body
