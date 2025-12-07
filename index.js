@@ -56,6 +56,59 @@ async function run() {
     
 // add inside run()
 // paste inside your run() after: const TutorCollection = db.collection('tutor')
+app.get('/tutors', async (req, res) => {
+    const result = await TutorCollection.find().toArray();
+    res.send(result);
+});
+// PATCH /tutors/:id/status
+app.patch('/tutors/:id/status', verifyFBToken, async (req, res) => {
+  try {
+    const idParam = req.params.id;
+    const status = req.body.status || req.query.status;
+    if (!status) return res.status(400).send({ message: 'status required' });
+
+    // try to convert id to ObjectId if valid hex; otherwise use as string
+    let filter = {};
+    try {
+      filter._id = new ObjectId(idParam);
+    } catch (err) {
+      filter._id = idParam;
+    }
+
+    const update = {
+      $set: {
+        status: String(status).trim(),
+        updatedAt: new Date()
+      }
+    };
+
+    const result = await TutorCollection.updateOne(filter, update);
+    res.send(result);
+  } catch (err) {
+    console.error('PATCH /tutors/:id/status error', err);
+    res.status(500).send({ message: 'Server error' });
+  }
+});
+
+// DELETE /tutors/:id
+app.delete('/tutors/:id', verifyFBToken, async (req, res) => {
+  try {
+    const idParam = req.params.id;
+    let filter = {};
+    try {
+      filter._id = new ObjectId(idParam);
+    } catch (err) {
+      filter._id = idParam;
+    }
+
+    const result = await TutorCollection.deleteOne(filter);
+    res.send(result);
+  } catch (err) {
+    console.error('DELETE /tutors/:id error', err);
+    res.status(500).send({ message: 'Server error' });
+  }
+});
+
 app.post('/tutors', async (req, res) => {
   const data = req.body
   const result =await TutorCollection.insertOne(data) 
@@ -63,7 +116,7 @@ app.post('/tutors', async (req, res) => {
  
 });
 
-app.post('/users', verifyFBToken, async (req, res) => {
+app.post('/users',  async (req, res) => {
   const { email, name = '', phone = '', role = 'Student' } = req.body;
 
   const normalizedEmail = String(email).toLowerCase().trim();
@@ -107,41 +160,14 @@ app.get('/users',async (req, res) => {
  
 });
 // // PATCH /users/:id/role
-// app.patch('/users/:id/role', verifyFBToken, async (req, res) => {
-//   try {
-//     const id = req.params.id;
-//     if (!id) return res.status(400).send({ message: 'id required' });
 
-//     // Optional: only admin should change roles — you can verify here using req.user from verifyFBToken
-//     // if (!req.user || req.user.role !== 'admin') return res.status(403).send({ message: 'Forbidden' });
-
-//     const { role } = req.body;
-//     if (!role) return res.status(400).send({ message: 'role required' });
-
-//     const normalizedRole = String(role).trim();
-
-//     const filter = { _id: new ObjectId(id) };
-//     const update = {
-//       $set: {
-//         role: normalizedRole,
-//         updatedAt: new Date()
-//       }
-//     };
-
-//     const result = await UsersCollection.updateOne(filter, update);
-//     res.send(result); // contains modifiedCount
-//   } catch (err) {
-//     console.error('PATCH /users/:id/role error', err);
-//     res.status(500).send({ message: 'Server error' });
-//   }
-// });
 
  app.get('/users/:email/role', async (req, res) => {
   const email = req.params.email;
   const user = await UsersCollection.findOne({ email });
   res.send({ role: user?.role || 'student' });
 });
-  app.patch('/users/:id/role', async (req, res) => {
+app.patch('/users/:id/role', async (req, res) => {
    
      const id = req.params.id;
            
@@ -158,6 +184,17 @@ app.get('/users',async (req, res) => {
             const result = await UsersCollection.updateOne(query, updatedDoc)
             res.send(result);
         })
+app.delete('/users/:id', verifyFBToken, async (req, res) => {
+  
+const id = req.params.id;
+const _id = new ObjectId(id);
+
+const result = await UsersCollection.deleteOne({ _id });
+
+res.send(result);
+  
+});
+
 
 app.get('/my-tuitions', async (req, res) => {
  
@@ -181,7 +218,7 @@ app.delete('/tuitions/:id', async (req, res) => {
  
 });
 
-   app.get('/tuitions', async (req, res) => {
+app.get('/tuitions', async (req, res) => {
     const result = await TuitionsCollection.find().toArray();
     res.send(result);
 });
