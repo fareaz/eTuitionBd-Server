@@ -57,10 +57,72 @@ async function run() {
 // add inside run()
 // paste inside your run() after: const TutorCollection = db.collection('tutor')
 app.get('/tutors', async (req, res) => {
-    const result = await TutorCollection.find().toArray();
-    res.send(result);
+  const result = await TutorCollection
+    .find()
+    .sort({ createdAt: -1 }) // -1 = newest first
+    .toArray();
+
+  res.send(result);
 });
-// GET only approved tutors
+
+  
+app.get('/my-tutors', async (req, res) => {
+  try {
+    const { email } = req.query;
+    if (!email) return res.status(400).json({ error: 'Missing email query' });
+
+    // optional: verify requester identity if using JWT - ensure user can only fetch their own records
+    const items = await TutorCollection.find({ email: String(email).toLowerCase().trim() }).sort({ createdAt: -1 }).toArray();
+    return res.send(items);
+  } catch (err) {
+    console.error('GET /my-tutors error', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PATCH /tutors/:id
+app.patch('/tutors/:id', async (req, res) => {
+  const { id } = req.params;
+  const payload = req.body;
+  const { ObjectId } = require('mongodb');
+  try {
+    if (!ObjectId.isValid(id)) return res.status(400).json({ error: 'Invalid id' });
+
+    // Only allow updating certain fields
+    const updateDoc = {
+      $set: {
+        name: payload.name,
+        qualifications: payload.qualifications,
+        experience: payload.experience,
+        expectedSalary: payload.expectedSalary,
+        updatedAt: new Date().toISOString()
+      }
+    };
+
+    const result = await TutorCollection.updateOne({ _id: new ObjectId(id) }, updateDoc);
+    return res.json(result);
+  } catch (err) {
+    console.error('PATCH /tutors/:id error', err);
+    return res.status(500).send({ error: 'Server error' });
+  }
+});
+
+// DELETE /tutors/:id
+app.delete('/tutors/:id', async (req, res) => {
+  const { id } = req.params;
+  const { ObjectId } = require('mongodb');
+  try {
+    if (!ObjectId.isValid(id)) return res.status(400).json({ error: 'Invalid id' });
+
+    const result = await TutorCollection.deleteOne({ _id: new ObjectId(id) });
+    return res.json(result);
+  } catch (err) {
+    console.error('DELETE /tutors/:id error', err);
+    return res.status(500).send({ error: 'Server error' });
+  }
+});
+
+
 app.get('/approved-tutors', async (req, res) => {
 
     const result = await TutorCollection.find({
@@ -94,7 +156,6 @@ app.patch('/tutors/:id/status', verifyFBToken, async (req, res) => {
   
 });
 
-// DELETE /tutors/:id
 app.delete('/tutors/:id', verifyFBToken, async (req, res) => {
   try {
     const idParam = req.params.id;
@@ -188,6 +249,53 @@ app.patch('/users/:id/role', async (req, res) => {
             const result = await UsersCollection.updateOne(query, updatedDoc)
             res.send(result);
         })
+        // PATCH /users/:id  -> admin can update user fields (email, name, phone, role)
+app.patch('/users/:id', verifyFBToken, async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!id) return res.status(400).send({ message: 'id required' });
+
+    // requester identity (from token)
+    const requesterEmail = String(req.decoded_email || '').toLowerCase().trim();
+    const requester = await UsersCollection.findOne({ email: requesterEmail });
+
+    if (!requester) return res.status(403).send({ message: 'Forbidden: requester not found' });
+
+    const requesterRole = String(requester.role || '').toLowerCase().trim();
+    if (requesterRole !== 'admin') {
+      return res.status(403).send({ message: 'Forbidden: admin only' });
+    }
+
+    // Build filter and update
+    let filter;
+    try {
+      filter = { _id: new ObjectId(id) };
+    } catch (err) {
+      filter = { _id: id };
+    }
+
+    const { email, name, phone, role } = req.body;
+    const updateFields = {};
+
+    if (typeof email === 'string' && email.trim() !== '') updateFields.email = String(email).toLowerCase().trim();
+    if (typeof name === 'string' && name.trim() !== '') updateFields.name = String(name).trim();
+    if (typeof phone === 'string') updateFields.phone = String(phone).trim();
+    if (typeof role === 'string' && role.trim() !== '') updateFields.role = String(role).trim();
+
+    if (Object.keys(updateFields).length === 0) {
+      return res.status(400).send({ message: 'No valid fields to update' });
+    }
+
+    updateFields.updatedAt = new Date();
+
+    const result = await UsersCollection.updateOne(filter, { $set: updateFields });
+    return res.send(result);
+  } catch (err) {
+    console.error('PATCH /users/:id error', err);
+    return res.status(500).send({ message: 'Server error' });
+  }
+});
+
 app.delete('/users/:id', verifyFBToken, async (req, res) => {
   
 const id = req.params.id;
