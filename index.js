@@ -71,15 +71,12 @@ app.get('/approved-tutors', async (req, res) => {
   
 });
 
-// PATCH /tutors/:id/status
-app.patch('/tutors/:id/status', verifyFBToken, async (req, res) => {
-  try {
-    const idParam = req.params.id;
-    const status = req.body.status || req.query.status;
-    if (!status) return res.status(400).send({ message: 'status required' });
 
-    // try to convert id to ObjectId if valid hex; otherwise use as string
-    let filter = {};
+app.patch('/tutors/:id/status', verifyFBToken, async (req, res) => {
+ 
+    const idParam = req.params.id;
+    const status = req.body.status ;
+    const filter = {};
     try {
       filter._id = new ObjectId(idParam);
     } catch (err) {
@@ -89,16 +86,12 @@ app.patch('/tutors/:id/status', verifyFBToken, async (req, res) => {
     const update = {
       $set: {
         status: String(status).trim(),
-        updatedAt: new Date()
       }
     };
 
     const result = await TutorCollection.updateOne(filter, update);
     res.send(result);
-  } catch (err) {
-    console.error('PATCH /tutors/:id/status error', err);
-    res.status(500).send({ message: 'Server error' });
-  }
+  
 });
 
 // DELETE /tutors/:id
@@ -151,7 +144,7 @@ app.post('/users',  async (req, res) => {
 
   return res.send(result);
 });
-// GET /users?searchText=...  (already had verifyFBToken middleware in your sample)
+
 app.get('/users',async (req, res) => {
 
     const searchText = req.query.searchText;
@@ -170,7 +163,7 @@ app.get('/users',async (req, res) => {
     res.send(result);
  
 });
-// // PATCH /users/:id/role
+
 
 
  app.get('/users/:email/role', async (req, res) => {
@@ -216,6 +209,43 @@ app.get('/my-tuitions', async (req, res) => {
  
 });
 
+app.get('/approved-tuitions', async (req, res) => {
+
+    const result = await TuitionsCollection.find({
+      status: "Approved",
+    }).sort({ createdAt: -1 }).toArray();
+
+    res.send(result);
+  
+});
+
+
+
+app.patch('/tuitions/:id/status',async (req, res) => {
+ 
+    const idParam = req.params.id;
+    const status = req.body.status ;
+   
+    const filter = {};
+    try {
+      filter._id = new ObjectId(idParam);
+    } catch (err) {
+      filter._id = idParam;
+    }
+    
+   const update = {
+      $set: {
+        status: String(status).trim(),
+    
+      }
+    };
+    const result = await TuitionsCollection.updateOne(filter, update);
+    return res.send(result);
+ 
+});
+
+
+
 
 app.delete('/tuitions/:id', async (req, res) => {
 
@@ -230,17 +260,20 @@ app.delete('/tuitions/:id', async (req, res) => {
 });
 
 app.get('/tuitions', async (req, res) => {
-    const result = await TuitionsCollection.find().toArray();
-    res.send(result);
+  const result = await TuitionsCollection
+    .find()
+    .sort({ createdAt: -1 })  
+    .toArray();
+
+  res.send(result);
 });
+
 
 
 app.patch('/tuitions/:id', async (req, res) => {
  
     const id = req.params.id;
     const _id = new ObjectId(id);
-
-
     const { subject, class: tuitionClass, location, budget } = req.body;
 
     // Build update object
@@ -263,7 +296,7 @@ app.patch('/tuitions/:id', async (req, res) => {
 });
 
 app.post('/tuitions', async (req, res) => {
-  
+ 
     const { subject, class: tuitionClass, location, budget, createdBy } = req.body
 
     const tuition = {
@@ -272,12 +305,13 @@ app.post('/tuitions', async (req, res) => {
       location: String(location).trim(),
       budget: Number(budget),
       createdAt: new Date(),
+      status: 'pending',
       createdBy: createdBy || null,
     }
-   
+
     const result = await TuitionsCollection.insertOne(tuition)
-    return res.send( result)
- 
+    return res.status(201).json({ insertedId: result.insertedId })
+  
 })
   
     await client.db("admin").command({ ping: 1 });
