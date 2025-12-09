@@ -141,6 +141,10 @@ async function run() {
       const result = await TutorCollection.insertOne(data);
       return res.send(result);
     });
+   app.get("/users/admin", async (req, res) => {
+  const adminUser = await UsersCollection.findOne({ email: "admin@gmail.com" });
+  res.send(adminUser);
+});
 
     app.post("/users", async (req, res) => {
       const { email, name = "", phone = "", role = "Student" } = req.body;
