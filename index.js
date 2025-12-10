@@ -24,7 +24,7 @@ const verifyFBToken = async (req, res, next) => {
   try {
     const idToken = token.split(" ")[1];
     const decoded = await admin.auth().verifyIdToken(idToken);
-    console.log("decoded in the token", decoded);
+    // console.log("decoded in the token", decoded);
     req.decoded_email = decoded.email;
     next();
   } catch (err) {
@@ -51,127 +51,156 @@ async function run() {
     const ApplicationsCollection = db.collection("applications");
     const paymentsCollection = db.collection("payments");
 
+    const verifyADMIN = async (req, res, next) => {
+      const email = req.decoded_email;
+      const user = await UsersCollection.findOne({ email });
+      if (user?.role !== "admin")
+        return res
+          .status(403)
+          .send({ message: "Admin only Actions!", role: user?.role });
+
+      next();
+    };
+    const verifyTutor = async (req, res, next) => {
+      const email = req.decoded_email;
+      const user = await UsersCollection.findOne({ email });
+      console.log(email);
+      if (user?.role !== "Tutor")
+        return res
+          .status(403)
+          .send({ message: "tutor only Actions!", role: user?.role });
+      next();
+    };
+
     app.post("/create-checkout-session", async (req, res) => {
       const paymentInfo = req.body;
-      console.log(paymentInfo);
-         const amount = parseInt(paymentInfo.cost) * 100;
-      
+      // console.log(paymentInfo);
+      const amount = parseInt(paymentInfo.cost) * 100;
+
       const session = await stripe.checkout.sessions.create({
         line_items: [
           {
             price_data: {
-               currency: "usd",
-              unit_amount:amount,
+              currency: "usd",
+              unit_amount: amount,
               product_data: {
                 name: `Please pay for: ${paymentInfo.tutorEmail}`,
               },
             },
-            
+
             quantity: 1,
           },
         ],
-        customer_email:paymentInfo.studentEmail,
+        customer_email: paymentInfo.studentEmail,
         mode: "payment",
-         metadata: {
-                    paymentId:paymentInfo.paymentId
-                },
+        metadata: {
+          paymentId: paymentInfo.paymentId,
+          tutorEmail: paymentInfo.tutorEmail,
+        },
         success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-cancelled`
-        
-        
+        cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-cancelled`,
       });
-       res.send({ url: session.url })
+      res.send({ url: session.url });
     });
-    app.patch("/payment-success", async (req, res) => {
- 
-    const sessionId = req.query.session_id;
-    const session = await stripe.checkout.sessions.retrieve(sessionId);
 
-    if (session.payment_status === "paid") {
-      const id = session.metadata.paymentId;
-      const query = { _id: new ObjectId(id) };
+    app.patch("/payment-success", async (req, res) => {
+      const sessionId = req.query.session_id;
+
+      const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+      const transactionId = session.payment_intent;
+
+      const txnQuery = { transactionId };
+      const paymentExist = await paymentsCollection.findOne(txnQuery);
+      if (paymentExist) {
+        return res.send({
+          success: true,
+          message: "already exists",
+          transactionId,
+          existingId: paymentExist._id,
+        });
+      }
+
+      if (session.payment_status !== "paid") {
+        return res
+          .status(400)
+          .send({ success: false, message: "Payment not paid" });
+      }
+
+      const appId = session.metadata.paymentId;
+
+      const appQuery = { _id: new ObjectId(appId) };
 
       const update = {
         $set: {
           status: "paid",
           updatedAt: new Date(),
-        }
+        },
       };
-      console.log(query,update)
-      const result = await ApplicationsCollection.updateOne(query, update);
+
+      const result = await ApplicationsCollection.updateOne(appQuery, update);
+
+      const payment = {
+        amount: session.amount_total / 100,
+        currency: session.currency,
+        studentEmail: session.customer_email,
+        tutorEmail: session.metadata.tutorEmail,
+        paymentId: session.metadata.paymentId,
+        transactionId: session.payment_intent,
+        paymentStatus: session.payment_status,
+        paidAt: new Date(),
+      };
+
+      const filter = { transactionId: payment.transactionId };
+      const upsertRes = await paymentsCollection.updateOne(
+        filter,
+        { $setOnInsert: payment },
+        { upsert: true }
+      );
+
+      let resultPayment = null;
+      if (upsertRes.upsertedCount === 1) {
+        resultPayment = {
+          acknowledged: true,
+          upsertedId: upsertRes.upsertedId,
+          message: "inserted",
+        };
+      } else {
+        const existing = await paymentsCollection.findOne(filter);
+        resultPayment = {
+          acknowledged: false,
+          message: "Already exists",
+          existingId: existing ? existing._id : null,
+        };
+      }
 
       return res.send({
         success: true,
-        message: "Payment updated successfully",
-        result,
+        message: "Payment processed",
+        transactionId: session.payment_intent,
+        appUpdate: result,
+        paymentResult: resultPayment,
       });
-    }
+    });
 
-    return res.send({ success: false, message: "Payment not completed" });
+    app.get("/payments", async (req, res) => {
+      const email = req.query.email;
+      const payments = await paymentsCollection
+        .find({ studentEmail: String(email).toLowerCase() })
+        .sort({ paidAt: -1 })
+        .toArray();
 
-  
-});
+      return res.send({ success: true, data: payments });
+    });
 
-
-
-
-
-// app.patch("/payment-success", async (req, res) => {
-//   try {
-//     const sessionId = req.query.session_id;
-//     if (!sessionId) {
-//       return res.status(400).json({ success: false, message: "missing session_id" });
-//     }
-
-//     console.log("Stripe session id:", sessionId);
-//     const session = await stripe.checkout.sessions.retrieve(sessionId);
-
-//     if (!session) {
-//       return res.status(404).json({ success: false, message: "session not found" });
-//     }
-
-//     // only handle paid sessions
-//     if (session.payment_status !== "paid") {
-//       return res.status(200).json({ success: false, message: "payment not completed", payment_status: session.payment_status });
-//     }
-
-//     // get parcel/application id from metadata (ensure metadata key name is correct)
-//     const id = session.metadata && session.metadata.parcelId;
-//     if (!id) {
-//       console.warn("No parcelId in session.metadata", session.metadata);
-//       return res.status(400).json({ success: false, message: "missing parcelId in session metadata" });
-//     }
-
-//     const query = { _id: new ObjectId(id) };
-//     const update = { $set: { status: "paid", updatedAt: new Date() } };
-
-//     const result = await ApplicationsCollection.updateOne(query, update);
-
-//     if (result.matchedCount === 0) {
-//       return res.status(404).json({ success: false, message: "application not found", id });
-//     }
-
-//     if (result.modifiedCount === 0) {
-//       // matched but not modified — maybe already paid
-//       return res.status(200).json({ success: true, message: "already up-to-date", result });
-//     }
-
-//     // success
-//     return res.status(200).json({ success: true, message: "payment recorded", result });
-//   } catch (err) {
-//     console.error("Error in /payment-success:", err);
-//     // send one error response
-//     return res.status(500).json({ success: false, message: "server error", error: err.message });
-//   }
-// });
-
-
-    
-  
-    
-
-   
-
+    app.get("/tutor-revenue", async (req, res) => {
+      const email = req.query.email;
+      const payments = await paymentsCollection
+        .find({ tutorEmail: String(email).toLowerCase() })
+        .sort({ paidAt: -1 })
+        .toArray();
+      return res.send({ success: true, data: payments });
+    });
 
     app.post("/applications", verifyFBToken, async (req, res) => {
       const tutorEmail = req.decoded_email;
@@ -198,7 +227,7 @@ async function run() {
       }
 
       // 4) Build final application document
-      console.log(tuitionDoc)
+      console.log(tuitionDoc);
       const application = {
         tuitionId: tuitionDoc._id,
 
@@ -227,7 +256,7 @@ async function run() {
       res.status(201).send({ insertedId: result.insertedId, application });
     });
 
-    app.get("/applications", async (req, res) => {
+    app.get("/applications", verifyFBToken, async (req, res) => {
       const { tutorEmail, studentEmail, tuitionId } = req.query;
       const q = {};
       if (tutorEmail) q.tutorEmail = String(tutorEmail).toLowerCase().trim();
@@ -260,10 +289,16 @@ async function run() {
         if (!appDoc)
           return res.status(404).send({ message: "Application not found" });
 
-        // requester info from token
+        // requester info from token (verifyFBToken sets req.decoded_email)
         const requesterEmail = String(req.decoded_email || "")
           .toLowerCase()
           .trim();
+        if (!requesterEmail) {
+          return res
+            .status(401)
+            .send({ message: "Unauthorized: missing token email" });
+        }
+
         const requester = await UsersCollection.findOne({
           email: requesterEmail,
         });
@@ -271,29 +306,58 @@ async function run() {
           .toLowerCase()
           .trim();
 
-        // who can change status: student-owner (who posted tuition) or admin
+        // ownership flags
         const isStudentOwner =
           appDoc.studentEmail &&
           appDoc.studentEmail.toLowerCase().trim() === requesterEmail;
         const isAdmin = requesterRole === "admin";
+        const isTutorOwner =
+          appDoc.tutorEmail &&
+          appDoc.tutorEmail.toLowerCase().trim() === requesterEmail;
 
-        if (!isStudentOwner && !isAdmin) {
-          return res
-            .status(403)
-            .send({
-              message:
-                "Forbidden: only student-owner or admin can update status",
-            });
+        // Allow rules:
+        // - admin => always allowed
+        // - student-owner => allowed to change status
+        // - tutor-owner => allow only when setting status to "confirmed" (or other allowed statuses if you want)
+        const { status, paid } = req.body;
+
+        // If requester is not authorized in general, reject early
+        if (!isAdmin && !isStudentOwner && !isTutorOwner) {
+          return res.status(403).send({
+            message:
+              "Forbidden: only related users or admin can update this application",
+          });
         }
 
-        const { status, paid } = req.body;
+        // Tutor-owner special rule: if tutor tries to change and status is provided,
+        // only allow when status === 'confirmed' (adjust if you allow more)
+        if (isTutorOwner && !isAdmin && !isStudentOwner) {
+          // tutor only allowed to set status to 'confirmed' (or mark paid? change as needed)
+          if (typeof status === "string") {
+            if (String(status).toLowerCase() !== "confirmed") {
+              return res.status(403).send({
+                message:
+                  "Forbidden: tutor can only mark application as 'confirmed'",
+              });
+            }
+          } else {
+            // If tutor tries to update other fields (like paid) deny
+            return res.status(403).send({
+              message: "Forbidden: tutor not allowed to update these fields",
+            });
+          }
+        }
+
+        // Build update
         const updateFields = {};
         if (typeof status === "string")
           updateFields.status = String(status).trim();
         if (typeof paid !== "undefined") updateFields.paid = !!paid;
+
         if (Object.keys(updateFields).length === 0) {
           return res.status(400).send({ message: "No valid fields to update" });
         }
+
         updateFields.updatedAt = new Date();
 
         const result = await ApplicationsCollection.updateOne(filter, {
@@ -301,7 +365,10 @@ async function run() {
         });
 
         // If status changed to 'approved', optionally reject other pending apps for same tuition
-        if (updateFields.status === "approved") {
+        if (
+          updateFields.status &&
+          String(updateFields.status).toLowerCase() === "approved"
+        ) {
           try {
             await ApplicationsCollection.updateMany(
               {
@@ -322,7 +389,6 @@ async function run() {
         return res.status(500).send({ message: "Server error" });
       }
     });
-
 
     app.patch("/applications/:id/pay", verifyFBToken, async (req, res) => {
       try {
@@ -354,11 +420,9 @@ async function run() {
         const isAdmin = requesterRole === "admin";
 
         if (!isStudentOwner && !isAdmin) {
-          return res
-            .status(403)
-            .send({
-              message: "Forbidden: only student-owner or admin can mark paid",
-            });
+          return res.status(403).send({
+            message: "Forbidden: only student-owner or admin can mark paid",
+          });
         }
 
         const updateFields = {
@@ -393,8 +457,6 @@ async function run() {
         return res.status(500).send({ message: "Server error" });
       }
     });
-
-    // DELETE /applications/:id -> delete (student-owner OR tutor-owner OR admin)
     app.delete("/applications/:id", verifyFBToken, async (req, res) => {
       try {
         const idParam = req.params.id;
@@ -428,11 +490,9 @@ async function run() {
           appDoc.tutorEmail.toLowerCase().trim() === requesterEmail;
 
         if (!isAdmin && !isStudentOwner && !isTutorOwner) {
-          return res
-            .status(403)
-            .send({
-              message: "Forbidden: only related users or admin can delete",
-            });
+          return res.status(403).send({
+            message: "Forbidden: only related users or admin can delete",
+          });
         }
 
         const result = await ApplicationsCollection.deleteOne(filter);
@@ -451,7 +511,7 @@ async function run() {
       res.send(result);
     });
 
-    app.get("/my-tutors", async (req, res) => {
+    app.get("/my-tutors", verifyFBToken, async (req, res) => {
       const { email } = req.query;
 
       const items = await TutorCollection.find({
@@ -462,7 +522,7 @@ async function run() {
       return res.send(items);
     });
 
-    app.patch("/tutors/:id", async (req, res) => {
+    app.patch("/tutors/:id", verifyFBToken, verifyTutor, async (req, res) => {
       const { id } = req.params;
       const payload = req.body;
       const updateDoc = {
@@ -482,7 +542,7 @@ async function run() {
       return res.json(result);
     });
 
-    app.delete("/tutors/:id", async (req, res) => {
+    app.delete("/tutors/:id", verifyFBToken, async (req, res) => {
       const { id } = req.params;
       const { ObjectId } = require("mongodb");
       const result = await TutorCollection.deleteOne({ _id: new ObjectId(id) });
@@ -498,25 +558,30 @@ async function run() {
       res.send(result);
     });
 
-    app.patch("/tutors/:id/status", verifyFBToken, async (req, res) => {
-      const idParam = req.params.id;
-      const status = req.body.status;
-      const filter = {};
-      try {
-        filter._id = new ObjectId(idParam);
-      } catch (err) {
-        filter._id = idParam;
+    app.patch(
+      "/tutors/:id/status",
+      verifyFBToken,
+      verifyADMIN,
+      async (req, res) => {
+        const idParam = req.params.id;
+        const status = req.body.status;
+        const filter = {};
+        try {
+          filter._id = new ObjectId(idParam);
+        } catch (err) {
+          filter._id = idParam;
+        }
+
+        const update = {
+          $set: {
+            status: String(status).trim(),
+          },
+        };
+
+        const result = await TutorCollection.updateOne(filter, update);
+        res.send(result);
       }
-
-      const update = {
-        $set: {
-          status: String(status).trim(),
-        },
-      };
-
-      const result = await TutorCollection.updateOne(filter, update);
-      res.send(result);
-    });
+    );
 
     app.delete("/tutors/:id", verifyFBToken, async (req, res) => {
       const idParam = req.params.id;
@@ -531,7 +596,7 @@ async function run() {
       res.send(result);
     });
 
-    app.post("/tutors", async (req, res) => {
+    app.post("/tutors", verifyFBToken, verifyTutor, async (req, res) => {
       const data = req.body;
       const result = await TutorCollection.insertOne(data);
       return res.send(result);
@@ -589,22 +654,26 @@ async function run() {
       const user = await UsersCollection.findOne({ email });
       res.send({ role: user?.role || "student" });
     });
-    app.patch("/users/:id/role", async (req, res) => {
-      const id = req.params.id;
+    app.patch(
+      "/users/:id/role",
+      verifyFBToken,
+      verifyADMIN,
+      async (req, res) => {
+        const id = req.params.id;
 
-      const roleInfo = req.body;
+        const roleInfo = req.body;
 
-      const query = { _id: new ObjectId(id) };
+        const query = { _id: new ObjectId(id) };
 
-      const updatedDoc = {
-        $set: {
-          role: roleInfo.role,
-        },
-      };
-      const result = await UsersCollection.updateOne(query, updatedDoc);
-      res.send(result);
-    });
-
+        const updatedDoc = {
+          $set: {
+            role: roleInfo.role,
+          },
+        };
+        const result = await UsersCollection.updateOne(query, updatedDoc);
+        res.send(result);
+      }
+    );
     app.patch("/users/:id", verifyFBToken, async (req, res) => {
       const id = req.params.id;
       const requesterEmail = String(req.decoded_email || "")
@@ -684,12 +753,14 @@ async function run() {
       res.send(result);
     });
 
-    app.get("/my-tuitions", async (req, res) => {
+    app.get("/my-tuitions", verifyFBToken, async (req, res) => {
       const email = req.query.email;
       const normalized = String(email).toLowerCase().trim();
       const result = await TuitionsCollection.find({
         createdBy: normalized,
-      }).toArray();
+      })
+        .sort({ createdAt: -1 })
+        .toArray();
       res.send(result);
     });
 
@@ -732,25 +803,30 @@ async function run() {
       });
     });
 
-    app.patch("/tuitions/:id/status", async (req, res) => {
-      const idParam = req.params.id;
-      const status = req.body.status;
+    app.patch(
+      "/tuitions/:id/status",
+      verifyFBToken,
+      verifyADMIN,
+      async (req, res) => {
+        const idParam = req.params.id;
+        const status = req.body.status;
 
-      const filter = {};
-      try {
-        filter._id = new ObjectId(idParam);
-      } catch (err) {
-        filter._id = idParam;
+        const filter = {};
+        try {
+          filter._id = new ObjectId(idParam);
+        } catch (err) {
+          filter._id = idParam;
+        }
+
+        const update = {
+          $set: {
+            status: String(status).trim(),
+          },
+        };
+        const result = await TuitionsCollection.updateOne(filter, update);
+        return res.send(result);
       }
-
-      const update = {
-        $set: {
-          status: String(status).trim(),
-        },
-      };
-      const result = await TuitionsCollection.updateOne(filter, update);
-      return res.send(result);
-    });
+    );
 
     app.delete("/tuitions/:id", async (req, res) => {
       console.log(req.params.id);
@@ -792,7 +868,7 @@ async function run() {
       return res.send({ success: true, result });
     });
 
-    app.post("/tuitions", async (req, res) => {
+    app.post("/tuitions", verifyFBToken, async (req, res) => {
       const {
         name,
         subject,
@@ -803,7 +879,7 @@ async function run() {
       } = req.body;
 
       const tuition = {
-        name:name,
+        name: name,
         subject: String(subject).trim(),
         class: String(tuitionClass).trim(),
         location: String(location).trim(),
