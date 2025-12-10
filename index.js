@@ -24,7 +24,7 @@ const verifyFBToken = async (req, res, next) => {
   try {
     const idToken = token.split(" ")[1];
     const decoded = await admin.auth().verifyIdToken(idToken);
-    // console.log("decoded in the token", decoded);
+   
     req.decoded_email = decoded.email;
     next();
   } catch (err) {
@@ -276,7 +276,7 @@ async function run() {
     });
 
     app.patch("/applications/:id", verifyFBToken, async (req, res) => {
-      try {
+     
         const idParam = req.params.id;
         let filter;
         try {
@@ -315,10 +315,6 @@ async function run() {
           appDoc.tutorEmail &&
           appDoc.tutorEmail.toLowerCase().trim() === requesterEmail;
 
-        // Allow rules:
-        // - admin => always allowed
-        // - student-owner => allowed to change status
-        // - tutor-owner => allow only when setting status to "confirmed" (or other allowed statuses if you want)
         const { status, paid } = req.body;
 
         // If requester is not authorized in general, reject early
@@ -384,10 +380,7 @@ async function run() {
         }
 
         return res.send(result);
-      } catch (err) {
-        console.error("PATCH /applications/:id error:", err);
-        return res.status(500).send({ message: "Server error" });
-      }
+      
     });
 
     app.patch("/applications/:id/pay", verifyFBToken, async (req, res) => {
