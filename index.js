@@ -5,6 +5,7 @@ require("dotenv").config();
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const port = 3000;
 const admin = require("firebase-admin");
+const stripe = require("stripe")(process.env.STRIPE_SECRET);
 
 const serviceAccount = require("./serviceAccountKey.json");
 admin.initializeApp({
@@ -48,6 +49,129 @@ async function run() {
     const UsersCollection = db.collection("users");
     const TutorCollection = db.collection("tutor");
     const ApplicationsCollection = db.collection("applications");
+    const paymentsCollection = db.collection("payments");
+
+    app.post("/create-checkout-session", async (req, res) => {
+      const paymentInfo = req.body;
+      console.log(paymentInfo);
+         const amount = parseInt(paymentInfo.cost) * 100;
+      
+      const session = await stripe.checkout.sessions.create({
+        line_items: [
+          {
+            price_data: {
+               currency: "usd",
+              unit_amount:amount,
+              product_data: {
+                name: `Please pay for: ${paymentInfo.tutorEmail}`,
+              },
+            },
+            
+            quantity: 1,
+          },
+        ],
+        customer_email:paymentInfo.studentEmail,
+        mode: "payment",
+         metadata: {
+                    paymentId:paymentInfo.paymentId
+                },
+        success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-cancelled`
+        
+        
+      });
+       res.send({ url: session.url })
+    });
+    app.patch("/payment-success", async (req, res) => {
+ 
+    const sessionId = req.query.session_id;
+    const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+    if (session.payment_status === "paid") {
+      const id = session.metadata.paymentId;
+      const query = { _id: new ObjectId(id) };
+
+      const update = {
+        $set: {
+          status: "paid",
+          updatedAt: new Date(),
+        }
+      };
+      console.log(query,update)
+      const result = await ApplicationsCollection.updateOne(query, update);
+
+      return res.send({
+        success: true,
+        message: "Payment updated successfully",
+        result,
+      });
+    }
+
+    return res.send({ success: false, message: "Payment not completed" });
+
+  
+});
+
+
+
+
+
+// app.patch("/payment-success", async (req, res) => {
+//   try {
+//     const sessionId = req.query.session_id;
+//     if (!sessionId) {
+//       return res.status(400).json({ success: false, message: "missing session_id" });
+//     }
+
+//     console.log("Stripe session id:", sessionId);
+//     const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+//     if (!session) {
+//       return res.status(404).json({ success: false, message: "session not found" });
+//     }
+
+//     // only handle paid sessions
+//     if (session.payment_status !== "paid") {
+//       return res.status(200).json({ success: false, message: "payment not completed", payment_status: session.payment_status });
+//     }
+
+//     // get parcel/application id from metadata (ensure metadata key name is correct)
+//     const id = session.metadata && session.metadata.parcelId;
+//     if (!id) {
+//       console.warn("No parcelId in session.metadata", session.metadata);
+//       return res.status(400).json({ success: false, message: "missing parcelId in session metadata" });
+//     }
+
+//     const query = { _id: new ObjectId(id) };
+//     const update = { $set: { status: "paid", updatedAt: new Date() } };
+
+//     const result = await ApplicationsCollection.updateOne(query, update);
+
+//     if (result.matchedCount === 0) {
+//       return res.status(404).json({ success: false, message: "application not found", id });
+//     }
+
+//     if (result.modifiedCount === 0) {
+//       // matched but not modified — maybe already paid
+//       return res.status(200).json({ success: true, message: "already up-to-date", result });
+//     }
+
+//     // success
+//     return res.status(200).json({ success: true, message: "payment recorded", result });
+//   } catch (err) {
+//     console.error("Error in /payment-success:", err);
+//     // send one error response
+//     return res.status(500).json({ success: false, message: "server error", error: err.message });
+//   }
+// });
+
+
+    
+  
+    
+
+   
+
 
     app.post("/applications", verifyFBToken, async (req, res) => {
       const tutorEmail = req.decoded_email;
@@ -74,11 +198,12 @@ async function run() {
       }
 
       // 4) Build final application document
+      console.log(tuitionDoc)
       const application = {
         tuitionId: tuitionDoc._id,
 
         // Tuition info
-        studentName:tuitionDoc.name,
+        studentName: tuitionDoc.name,
         subject: tuitionDoc.subject,
         class: tuitionDoc.class,
         location: tuitionDoc.location,
@@ -102,70 +227,25 @@ async function run() {
       res.status(201).send({ insertedId: result.insertedId, application });
     });
 
-    app.get("/applications",async (req, res) => {
-        const { tutorEmail, studentEmail, tuitionId } = req.query;
-        const q = {};
-        if (tutorEmail) q.tutorEmail = String(tutorEmail).toLowerCase().trim();
-        if (studentEmail)
-          q.studentEmail = String(studentEmail).toLowerCase().trim();
-        if (tuitionId) {
-          try {
-            q.tuitionId = new ObjectId(tuitionId);
-          } catch {
-            return res.status(400).json({ message: "Invalid tuitionId" });
-          }
+    app.get("/applications", async (req, res) => {
+      const { tutorEmail, studentEmail, tuitionId } = req.query;
+      const q = {};
+      if (tutorEmail) q.tutorEmail = String(tutorEmail).toLowerCase().trim();
+      if (studentEmail)
+        q.studentEmail = String(studentEmail).toLowerCase().trim();
+      if (tuitionId) {
+        try {
+          q.tuitionId = new ObjectId(tuitionId);
+        } catch {
+          return res.status(400).json({ message: "Invalid tuitionId" });
         }
-        const items = await ApplicationsCollection.find(q)
-          .sort({ createdAt: -1 })
-          .toArray();
-        res.send(items);
-      });
+      }
+      const items = await ApplicationsCollection.find(q)
+        .sort({ createdAt: -1 })
+        .toArray();
+      res.send(items);
+    });
 
-    // // PATCH /applications/:id/status -> update status (admin or student maybe)
-    // app.patch(
-    //   "/applications/:id/status",
-    //   verifyFBToken,
-    //   isAdmin(UsersCollection), // or change middleware logic to allow student to accept/reject
-    //   wrapAsync(async (req, res) => {
-    //     const id = parseObjectIdOrThrow(req.params.id);
-    //     const { status } = req.body;
-    //     if (!status)
-    //       return res.status(400).json({ message: "status is required" });
-    //     const result = await ApplicationsCollection.updateOne(
-    //       { _id: id },
-    //       { $set: { status: String(status).trim(), updatedAt: new Date() } }
-    //     );
-    //     res.json(result);
-    //   })
-    // );
-
-    // // Optional: tutor can cancel their application
-    // app.delete(
-    //   "/applications/:id",
-    //   verifyFBToken,
-    //   wrapAsync(async (req, res) => {
-    //     const id = parseObjectIdOrThrow(req.params.id);
-    //     const tutorEmail = req.decoded_email;
-    //     const appDoc = await ApplicationsCollection.findOne({ _id: id });
-    //     if (!appDoc)
-    //       return res.status(404).json({ message: "Application not found" });
-    //     // only owner tutor or admin can delete
-    //     const requester = await UsersCollection.findOne({ email: tutorEmail });
-    //     const isRequesterAdmin =
-    //       String(requester?.role || "").toLowerCase() === "admin";
-    //     if (!isRequesterAdmin && appDoc.tutorEmail !== tutorEmail) {
-    //       return res.status(403).json({ message: "Forbidden" });
-    //     }
-    //     const result = await ApplicationsCollection.deleteOne({ _id: id });
-    //     res.json(result);
-    //   })
-    // );
-    /* ---------------------------
-  Applications: PATCH / DELETE / PAY routes
-  Paste inside your run() after ApplicationsCollection is defined
----------------------------- */
-
-    // PATCH /applications/:id  -> update status or paid (only student-owner or admin)
     app.patch("/applications/:id", verifyFBToken, async (req, res) => {
       try {
         const idParam = req.params.id;
@@ -177,31 +257,48 @@ async function run() {
         }
 
         const appDoc = await ApplicationsCollection.findOne(filter);
-        if (!appDoc) return res.status(404).send({ message: "Application not found" });
+        if (!appDoc)
+          return res.status(404).send({ message: "Application not found" });
 
         // requester info from token
-        const requesterEmail = String(req.decoded_email || "").toLowerCase().trim();
-        const requester = await UsersCollection.findOne({ email: requesterEmail });
-        const requesterRole = String(requester?.role || "").toLowerCase().trim();
+        const requesterEmail = String(req.decoded_email || "")
+          .toLowerCase()
+          .trim();
+        const requester = await UsersCollection.findOne({
+          email: requesterEmail,
+        });
+        const requesterRole = String(requester?.role || "")
+          .toLowerCase()
+          .trim();
 
         // who can change status: student-owner (who posted tuition) or admin
-        const isStudentOwner = appDoc.studentEmail && appDoc.studentEmail.toLowerCase().trim() === requesterEmail;
+        const isStudentOwner =
+          appDoc.studentEmail &&
+          appDoc.studentEmail.toLowerCase().trim() === requesterEmail;
         const isAdmin = requesterRole === "admin";
 
         if (!isStudentOwner && !isAdmin) {
-          return res.status(403).send({ message: "Forbidden: only student-owner or admin can update status" });
+          return res
+            .status(403)
+            .send({
+              message:
+                "Forbidden: only student-owner or admin can update status",
+            });
         }
 
         const { status, paid } = req.body;
         const updateFields = {};
-        if (typeof status === "string") updateFields.status = String(status).trim();
+        if (typeof status === "string")
+          updateFields.status = String(status).trim();
         if (typeof paid !== "undefined") updateFields.paid = !!paid;
         if (Object.keys(updateFields).length === 0) {
           return res.status(400).send({ message: "No valid fields to update" });
         }
         updateFields.updatedAt = new Date();
 
-        const result = await ApplicationsCollection.updateOne(filter, { $set: updateFields });
+        const result = await ApplicationsCollection.updateOne(filter, {
+          $set: updateFields,
+        });
 
         // If status changed to 'approved', optionally reject other pending apps for same tuition
         if (updateFields.status === "approved") {
@@ -226,7 +323,7 @@ async function run() {
       }
     });
 
-    // PATCH /applications/:id/pay -> mark as paid & approved (student-owner or admin)
+
     app.patch("/applications/:id/pay", verifyFBToken, async (req, res) => {
       try {
         const idParam = req.params.id;
@@ -238,21 +335,40 @@ async function run() {
         }
 
         const appDoc = await ApplicationsCollection.findOne(filter);
-        if (!appDoc) return res.status(404).send({ message: "Application not found" });
+        if (!appDoc)
+          return res.status(404).send({ message: "Application not found" });
 
-        const requesterEmail = String(req.decoded_email || "").toLowerCase().trim();
-        const requester = await UsersCollection.findOne({ email: requesterEmail });
-        const requesterRole = String(requester?.role || "").toLowerCase().trim();
+        const requesterEmail = String(req.decoded_email || "")
+          .toLowerCase()
+          .trim();
+        const requester = await UsersCollection.findOne({
+          email: requesterEmail,
+        });
+        const requesterRole = String(requester?.role || "")
+          .toLowerCase()
+          .trim();
 
-        const isStudentOwner = appDoc.studentEmail && appDoc.studentEmail.toLowerCase().trim() === requesterEmail;
+        const isStudentOwner =
+          appDoc.studentEmail &&
+          appDoc.studentEmail.toLowerCase().trim() === requesterEmail;
         const isAdmin = requesterRole === "admin";
 
         if (!isStudentOwner && !isAdmin) {
-          return res.status(403).send({ message: "Forbidden: only student-owner or admin can mark paid" });
+          return res
+            .status(403)
+            .send({
+              message: "Forbidden: only student-owner or admin can mark paid",
+            });
         }
 
-        const updateFields = { paid: true, status: "approved", updatedAt: new Date() };
-        const result = await ApplicationsCollection.updateOne(filter, { $set: updateFields });
+        const updateFields = {
+          paid: true,
+          status: "approved",
+          updatedAt: new Date(),
+        };
+        const result = await ApplicationsCollection.updateOne(filter, {
+          $set: updateFields,
+        });
 
         // reject other pending applications for same tuition
         try {
@@ -265,7 +381,10 @@ async function run() {
             { $set: { status: "rejected", updatedAt: new Date() } }
           );
         } catch (e) {
-          console.error("Failed to auto-reject other applications after pay:", e);
+          console.error(
+            "Failed to auto-reject other applications after pay:",
+            e
+          );
         }
 
         return res.send(result);
@@ -287,18 +406,33 @@ async function run() {
         }
 
         const appDoc = await ApplicationsCollection.findOne(filter);
-        if (!appDoc) return res.status(404).send({ message: "Application not found" });
+        if (!appDoc)
+          return res.status(404).send({ message: "Application not found" });
 
-        const requesterEmail = String(req.decoded_email || "").toLowerCase().trim();
-        const requester = await UsersCollection.findOne({ email: requesterEmail });
-        const requesterRole = String(requester?.role || "").toLowerCase().trim();
+        const requesterEmail = String(req.decoded_email || "")
+          .toLowerCase()
+          .trim();
+        const requester = await UsersCollection.findOne({
+          email: requesterEmail,
+        });
+        const requesterRole = String(requester?.role || "")
+          .toLowerCase()
+          .trim();
 
         const isAdmin = requesterRole === "admin";
-        const isStudentOwner = appDoc.studentEmail && appDoc.studentEmail.toLowerCase().trim() === requesterEmail;
-        const isTutorOwner = appDoc.tutorEmail && appDoc.tutorEmail.toLowerCase().trim() === requesterEmail;
+        const isStudentOwner =
+          appDoc.studentEmail &&
+          appDoc.studentEmail.toLowerCase().trim() === requesterEmail;
+        const isTutorOwner =
+          appDoc.tutorEmail &&
+          appDoc.tutorEmail.toLowerCase().trim() === requesterEmail;
 
         if (!isAdmin && !isStudentOwner && !isTutorOwner) {
-          return res.status(403).send({ message: "Forbidden: only related users or admin can delete" });
+          return res
+            .status(403)
+            .send({
+              message: "Forbidden: only related users or admin can delete",
+            });
         }
 
         const result = await ApplicationsCollection.deleteOne(filter);
@@ -308,9 +442,6 @@ async function run() {
         return res.status(500).send({ message: "Server error" });
       }
     });
-
-
-
 
     app.get("/tutors", async (req, res) => {
       const result = await TutorCollection.find()
@@ -517,30 +648,32 @@ async function run() {
       });
       return res.send(result);
     });
-  
+
     app.patch("/users/update/:id", verifyFBToken, async (req, res) => {
-  const id = req.params.id;
-  const requesterEmail = String(req.decoded_email || "")
-    .toLowerCase()
-    .trim();
-  const requester = await UsersCollection.findOne({ email: requesterEmail });
+      const id = req.params.id;
+      const requesterEmail = String(req.decoded_email || "")
+        .toLowerCase()
+        .trim();
+      const requester = await UsersCollection.findOne({
+        email: requesterEmail,
+      });
 
-  const { name, phone } = req.body;
+      const { name, phone } = req.body;
 
-  const updateFields = {};
-  if (typeof name === "string") updateFields.name = name.trim();
-  if (typeof phone === "string") updateFields.phone = phone.trim();
+      const updateFields = {};
+      if (typeof name === "string") updateFields.name = name.trim();
+      if (typeof phone === "string") updateFields.phone = phone.trim();
 
- 
-  updateFields.updatedAt = new Date();
+      updateFields.updatedAt = new Date();
 
-  const filter = { _id: new ObjectId(id) };
+      const filter = { _id: new ObjectId(id) };
 
-  const result = await UsersCollection.updateOne(filter, { $set: updateFields });
+      const result = await UsersCollection.updateOne(filter, {
+        $set: updateFields,
+      });
 
-  res.send(result);
-});
-
+      res.send(result);
+    });
 
     app.delete("/users/:id", verifyFBToken, async (req, res) => {
       const id = req.params.id;
@@ -661,6 +794,7 @@ async function run() {
 
     app.post("/tuitions", async (req, res) => {
       const {
+        name,
         subject,
         class: tuitionClass,
         location,
@@ -669,6 +803,7 @@ async function run() {
       } = req.body;
 
       const tuition = {
+        name:name,
         subject: String(subject).trim(),
         class: String(tuitionClass).trim(),
         location: String(location).trim(),
