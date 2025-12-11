@@ -226,8 +226,8 @@ async function run() {
           .send({ message: "You already applied to this tuition" });
       }
 
-      // 4) Build final application document
-      console.log(tuitionDoc);
+    
+      // console.log(tuitionDoc);
       const application = {
         tuitionId: tuitionDoc._id,
 
@@ -269,10 +269,10 @@ async function run() {
           return res.status(400).json({ message: "Invalid tuitionId" });
         }
       }
-      const items = await ApplicationsCollection.find(q)
+      const result = await ApplicationsCollection.find(q)
         .sort({ createdAt: -1 })
         .toArray();
-      res.send(items);
+      res.send(result);
     });
 
     app.patch("/applications/:id", verifyFBToken, async (req, res) => {
@@ -325,10 +325,9 @@ async function run() {
           });
         }
 
-        // Tutor-owner special rule: if tutor tries to change and status is provided,
-        // only allow when status === 'confirmed' (adjust if you allow more)
+       
         if (isTutorOwner && !isAdmin && !isStudentOwner) {
-          // tutor only allowed to set status to 'confirmed' (or mark paid? change as needed)
+        
           if (typeof status === "string") {
             if (String(status).toLowerCase() !== "confirmed") {
               return res.status(403).send({
@@ -360,7 +359,7 @@ async function run() {
           $set: updateFields,
         });
 
-        // If status changed to 'approved', optionally reject other pending apps for same tuition
+     
         if (
           updateFields.status &&
           String(updateFields.status).toLowerCase() === "approved"
@@ -384,7 +383,7 @@ async function run() {
     });
 
     app.patch("/applications/:id/pay", verifyFBToken, async (req, res) => {
-      try {
+     
         const idParam = req.params.id;
         let filter;
         try {
@@ -427,7 +426,7 @@ async function run() {
           $set: updateFields,
         });
 
-        // reject other pending applications for same tuition
+      
         try {
           await ApplicationsCollection.updateMany(
             {
@@ -445,13 +444,10 @@ async function run() {
         }
 
         return res.send(result);
-      } catch (err) {
-        console.error("PATCH /applications/:id/pay error:", err);
-        return res.status(500).send({ message: "Server error" });
-      }
+      
     });
     app.delete("/applications/:id", verifyFBToken, async (req, res) => {
-      try {
+     
         const idParam = req.params.id;
         let filter;
         try {
@@ -490,15 +486,12 @@ async function run() {
 
         const result = await ApplicationsCollection.deleteOne(filter);
         return res.send(result);
-      } catch (err) {
-        console.error("DELETE /applications/:id error:", err);
-        return res.status(500).send({ message: "Server error" });
-      }
+     
     });
 
-    app.get("/tutors", async (req, res) => {
+    app.get("/tutors", async (req, res) => {git
       const result = await TutorCollection.find()
-        .sort({ createdAt: -1 }) // -1 = newest first
+        .sort({ createdAt: -1 })
         .toArray();
 
       res.send(result);
