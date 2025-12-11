@@ -7,7 +7,11 @@ const port = 3000;
 const admin = require("firebase-admin");
 const stripe = require("stripe")(process.env.STRIPE_SECRET);
 
-const serviceAccount = require("./serviceAccountKey.json");
+//  console.log(process.env.FB_SERVICE_KEY)
+
+const decoded = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString('utf8')
+const serviceAccount = JSON.parse(decoded);
+
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
@@ -45,7 +49,7 @@ const client = new MongoClient(uri, {
 
 async function run() {
   try {
-    await client.connect();
+    // await client.connect();
 
     const db = client.db("eTuitionBd");
     const TuitionsCollection = db.collection("tuitions");
@@ -1014,8 +1018,8 @@ async function run() {
       return res.status(201).json({ insertedId: result.insertedId });
     });
 
-    await client.db("admin").command({ ping: 1 });
-    console.log("Pinged your deployment. You successfully connected to MongoDB!");
+    // await client.db("admin").command({ ping: 1 });
+    // console.log("Pinged your deployment. You successfully connected to MongoDB!");
   } finally {
     // await client.close();
   }
